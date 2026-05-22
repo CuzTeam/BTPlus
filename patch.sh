@@ -258,6 +258,27 @@ PYEOF
     log "config.json 写入成功"
 }
 
+# ── 交互输入（兼容 curl|bash 管道场景）────────────────────────────────────────
+# curl|bash 时 stdin 已被管道占用，read 必须绑定到 /dev/tty
+# 若 /dev/tty 也不可用（纯非交互环境），则要求调用方通过 --url/--key 传参
+_read_tty() {
+    local prompt="$1"
+    local varname="$2"
+    local val=""
+
+    if [[ -t 0 ]]; then
+        # 标准交互模式，stdin 正常
+        read -rp "$prompt" val
+    elif [[ -c /dev/tty ]]; then
+        # curl|bash 管道模式，绑定 /dev/tty
+        read -rp "$prompt" val < /dev/tty
+    else
+        error "当前为非交互环境且无法访问 /dev/tty，请通过 --url 和 --key 参数传入配置"
+    fi
+
+    printf -v "$varname" '%s' "$val"
+}
+
 # ── do_apply ──────────────────────────────────────────────────────────────────
 do_apply() {
     local base_url="${ARG_URL:-}"
@@ -269,7 +290,7 @@ do_apply() {
     echo "========================================="
 
     if [[ -z "$base_url" ]]; then
-        read -rp "请输入 Base URL (如 https://api.openai.com/v1): " base_url
+        _read_tty "请输入 Base URL (如 https://api.openai.com/v1): " base_url
     else
         log "Base URL: $base_url"
     fi
@@ -277,7 +298,7 @@ do_apply() {
     [[ -n "$base_url" ]] || error "Base URL 不能为空"
 
     if [[ -z "$api_key" ]]; then
-        read -rp "请输入 API Key: " api_key
+        _read_tty "请输入 API Key: " api_key
     else
         log "API Key: ${api_key:0:8}..."
     fi
@@ -298,7 +319,8 @@ do_apply() {
     echo "─────────────────────────────────"
     echo ""
 
-    read -rp "确认使用以上模型？[Y/n]: " confirm
+    local confirm=""
+    _read_tty "确认使用以上模型？[Y/n]: " confirm
     if [[ "${confirm:-Y}" =~ ^[Nn] ]]; then
         log "已取消，未作任何修改"
         exit 0
@@ -309,7 +331,7 @@ do_apply() {
 
     echo ""
     log "✓ Patch 完成！聊天模型走自定义 API，Embedding 继续走官方。"
-    warn "如需恢复，运行: $0 revert"
+    warn "如需恢复，运行: bash <(curl -fsSL <脚本URL>) revert"
 }
 
 # ── do_revert ─────────────────────────────────────────────────────────────────
