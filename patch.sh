@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 # AI 助手自定义 API Patch 脚本
 # 用途：将聊天/Agent 模型切换到自定义 OpenAI 兼容 API，Embedding 继续走官方
-#
-# 用法:
-#   patch_api.sh apply  [--url BASE_URL] [--key API_KEY]
-#   patch_api.sh revert
-#   patch_api.sh status
 
 set -euo pipefail
 
@@ -31,7 +26,6 @@ _ts()   { date '+%H:%M:%S'; }
 log()   { echo -e "[$(_ts)] ${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "[$(_ts)] ${YELLOW}[WARN]${NC}  $*"; }
 step()  { echo -e "\n[$(_ts)] ${BLUE}[STEP]${NC}  $*"; }
-# error 输出到 stderr，调用方可以用 || exit 1 接管，但 set -e 也会自动终止
 error() { echo -e "[$(_ts)] ${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 # ── 临时文件管理 ──────────────────────────────────────────────────────────────
@@ -68,7 +62,6 @@ patch_commod() {
         log "已备份 comMod.py -> $(basename "$COM_MOD_BAK")"
     fi
 
-    # 将 Python 脚本写入临时文件，避免 marker 内容被 shell 解析
     local py_patch
     py_patch=$(_make_tmp)
     cat > "$py_patch" << 'PYEOF'
@@ -110,15 +103,12 @@ PYEOF
         error "comMod.py patch 失败，已自动还原备份"
     fi
 
-    # 二次校验
     if ! grep -qF "$PATCH_MARKER" "$COM_MOD"; then
         cp "$COM_MOD_BAK" "$COM_MOD"
         error "comMod.py patch 校验失败，已自动还原备份"
     fi
 
     log "comMod.py patch 成功"
-
-    # 清除 prompt 模板中硬编码的 base_url/api_key（先备份）
     _patch_prompts
 }
 
@@ -146,7 +136,6 @@ _patch_prompts() {
 }
 
 # ── fetch_models ──────────────────────────────────────────────────────────────
-# 结果写入 $out_file（每行一个 model id），避免子 shell 吞掉 error() 的 exit
 fetch_models() {
     local base_url="$1"
     local api_key="$2"
@@ -158,7 +147,6 @@ fetch_models() {
     resp_body=$(_make_tmp)
 
     local http_code
-    # || true：防止 curl 连接错误在 set -e 下直接终止脚本，由后续 http_code 判断
     http_code=$(curl -sf \
         --connect-timeout 10 \
         --max-time 30 \
@@ -173,7 +161,6 @@ fetch_models() {
         error "拉取模型列表失败 (HTTP ${http_code:-000}，可能是网络超时或 URL 错误)"
     fi
 
-    # 解析并过滤，写入 out_file
     local py_parse
     py_parse=$(_make_tmp)
     cat > "$py_parse" << 'PYEOF'
@@ -227,7 +214,6 @@ write_config() {
         log "已备份 config.json -> $(basename "$CONFIG_JSON_BAK")"
     fi
 
-    # 完全由 Python 构造 JSON，彻底规避 shell 字符串注入
     local py_write
     py_write=$(_make_tmp)
     cat > "$py_write" << 'PYEOF'
@@ -258,20 +244,17 @@ PYEOF
     log "config.json 写入成功"
 }
 
-# ── 交互输入（兼容 curl|bash 管道场景）────────────────────────────────────────
-# curl|bash 时 stdin 已被管道占用，read 必须绑定到 /dev/tty
-# 若 /dev/tty 也不可用（纯非交互环境），则要求调用方通过 --url/--key 传参
+# ── 交互输入修复 ──────────────────────────────────────────────────────────────
 _read_tty() {
     local prompt="$1"
     local varname="$2"
     local val=""
 
-    if [[ -t 0 ]]; then
-        # 标准交互模式，stdin 正常
-        read -rp "$prompt" val
-    elif [[ -c /dev/tty ]]; then
-        # curl|bash 管道模式，绑定 /dev/tty
+    # 针对 curl | bash 情况，标准输入被覆盖，这里优先尝试从 /dev/tty 读取
+    if [[ -c /dev/tty ]]; then
         read -rp "$prompt" val < /dev/tty
+    elif [[ -t 0 ]]; then
+        read -rp "$prompt" val
     else
         error "当前为非交互环境且无法访问 /dev/tty，请通过 --url 和 --key 参数传入配置"
     fi
@@ -279,7 +262,7 @@ _read_tty() {
     printf -v "$varname" '%s' "$val"
 }
 
-# ── do_apply ──────────────────────────────────────────────────────────────────
+# ── 核心逻辑 ──────────────────────────────────────────────────────────────────
 do_apply() {
     local base_url="${ARG_URL:-}"
     local api_key="${ARG_KEY:-}"
@@ -331,10 +314,8 @@ do_apply() {
 
     echo ""
     log "✓ Patch 完成！聊天模型走自定义 API，Embedding 继续走官方。"
-    warn "如需恢复，运行: bash <(curl -fsSL <脚本URL>) revert"
 }
 
-# ── do_revert ─────────────────────────────────────────────────────────────────
 do_revert() {
     step "开始 Revert..."
     local reverted=0
@@ -359,7 +340,6 @@ do_revert() {
         reverted=$((reverted + 1))
     fi
 
-    # 还原 prompt 模板
     if [[ -d "$PROMPTS_BAK_DIR" ]]; then
         local restored=0
         local f
@@ -384,21 +364,18 @@ do_revert() {
     fi
 }
 
-# ── do_status ─────────────────────────────────────────────────────────────────
 do_status() {
     echo ""
     echo "========================================="
     echo "  当前 Patch 状态"
     echo "========================================="
 
-    # comMod.py
     if grep -qF "$PATCH_MARKER" "$COM_MOD" 2>/dev/null; then
         log "comMod.py     : ✓ 已 patch"
     else
         warn "comMod.py     : ✗ 未 patch（或文件不存在）"
     fi
 
-    # config.json
     if [[ -f "$CONFIG_JSON" ]]; then
         log "config.json   : 存在"
         python3 - "$CONFIG_JSON" << 'PYEOF'
@@ -421,57 +398,64 @@ PYEOF
         warn "config.json   : 不存在"
     fi
 
-    # prompts 备份
     if [[ -d "$PROMPTS_BAK_DIR" ]]; then
         warn "prompt 模板备份: 存在（$PROMPTS_BAK_DIR）"
     fi
-
     echo ""
 }
-
-# ── 参数解析 ──────────────────────────────────────────────────────────────────
-ARG_URL=""
-ARG_KEY=""
-ACTION=""
 
 usage() {
     cat << 'EOF'
 用法:
-  patch_api.sh apply  [--url BASE_URL] [--key API_KEY]
-  patch_api.sh revert
-  patch_api.sh status
+  patch_api.sh [apply|revert|status] [--url BASE_URL] [--key API_KEY]
 
 命令:
-  apply    配置自定义 API（默认）
+  apply    配置自定义 API（默认参数）
   revert   恢复为官方 API，还原所有备份
   status   查看当前 patch 状态
 
 选项:
-  --url BASE_URL   指定 Base URL（跳过交互输入）
-  --key API_KEY    指定 API Key（跳过交互输入）
-  -h, --help       显示此帮助
+  --url    指定 Base URL（跳过交互输入）
+  --key    指定 API Key（跳过交互输入）
+  -h, --help 显示帮助
 EOF
     exit 0
 }
 
+# ── 参数解析修复 ──────────────────────────────────────────────────────────────
+ARG_URL=""
+ARG_KEY=""
+ACTION=""
+
+# 预先循环提取出所有的命令和选项参数
 while [[ $# -gt 0 ]]; do
     case "$1" in
         apply|revert|status)
-            ACTION="$1"; shift ;;
+            ACTION="$1"
+            shift
+            ;;
         --url)
             [[ -n "${2:-}" ]] || error "--url 需要一个参数"
-            ARG_URL="$2"; shift 2 ;;
+            ARG_URL="$2"
+            shift 2
+            ;;
         --key)
             [[ -n "${2:-}" ]] || error "--key 需要一个参数"
-            ARG_KEY="$2"; shift 2 ;;
+            ARG_KEY="$2"
+            shift 2
+            ;;
         -h|--help)
-            usage ;;
+            usage
+            ;;
         *)
             echo "未知参数: $1" >&2
-            usage ;;
+            usage
+            ;;
     esac
 done
 
+# 如果通过管道运行（如 curl | bash），且直接带参数（如 curl ... | bash -s -- revert）
+# 确保 ACTION 的默认值降级回 apply 
 case "${ACTION:-apply}" in
     apply)  do_apply  ;;
     revert) do_revert ;;
