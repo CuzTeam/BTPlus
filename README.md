@@ -9,3 +9,4 @@ curl -fsSL https://raw.githubusercontent.com/CuzTeam/BTPlus/refs/heads/main/patc
 
 ## Thanks
 - [Linux.do](https://linux.do)
+- [(Author) Cuz AI](https://ai.cuz-lab.space)
