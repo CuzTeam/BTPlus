@@ -7,5 +7,5 @@ Baota Panel AI Patch Script
 curl -fsSL https://raw.githubusercontent.com/CuzTeam/BTPlus/refs/heads/main/patch.sh | bash
 ```
 
-## Recommended AI Interface Providers
-- [(Free)Cuz AI](https://ai.cuz-lab.space)
+## Thanks
+- [Linux.do](https://linux.do)
